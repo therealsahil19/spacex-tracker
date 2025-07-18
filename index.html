@@ -223,8 +223,9 @@
         let diagnosticsLog = [];
         let isRefreshing = false;
 
-        // API Configuration (Using only the working v4 endpoints)
-        const API_BASE = 'https://api.spacexdata.com/v4';
+        // API Configuration (Using TheSpaceDevs Launch Library API for up-to-date data)
+        const API_BASE = 'https://ll.thespacedevs.com/2.2.0';
+        const SPACEX_AGENCY_ID = 121;  // SpaceX agency ID
 
         // Utility functions
         function logDiagnostic(message) {
@@ -270,7 +271,7 @@
                 }
 
                 const data = await response.json();
-                logDiagnostic(`Successfully fetched ${data.length} items from ${endpoint}`);
+                logDiagnostic(`Successfully fetched ${data.results ? data.results.length : 'unknown'} items from ${endpoint}`);
                 return data;
             } catch (error) {
                 logDiagnostic(`API error: ${error.message}`);
@@ -279,7 +280,7 @@
         }
 
         // UI Functions
-        function displayLaunches(launches, containerId) {
+        function displayLaunches(launches, containerId, isUpcoming = false) {
             const container = document.getElementById(containerId);
             
             if (!launches || launches.length === 0) {
@@ -294,17 +295,21 @@
                 const launchCard = document.createElement('div');
                 launchCard.className = 'launch-card';
 
-                const successClass = launch.success === true ? 'success' : (launch.success === false ? 'failure' : '');
-                const successText = launch.upcoming ? 'Upcoming' : (launch.success ? 'Success' : 'Failure');
+                const success = isUpcoming ? null : (launch.status.id === 3);
+                const successClass = success === true ? 'success' : (success === false ? 'failure' : '');
+                const successText = isUpcoming ? 'Upcoming' : (success ? 'Success' : 'Failure');
+
+                const payloads = launch.mission ? [launch.mission.id] : ['TBD'];
+                const details = launch.mission ? launch.mission.description : '';
 
                 launchCard.innerHTML = `
                     <div class="launch-name">${launch.name}</div>
-                    <div class="launch-date">${formatDate(launch.date_utc)}</div>
+                    <div class="launch-date">${formatDate(launch.net)}</div>
                     <div class="launch-details">
-                        <strong>Rocket ID:</strong> ${launch.rocket}<br>
-                        <strong>Payload IDs:</strong> ${launch.payloads.join(', ') || 'TBD'}<br>
+                        <strong>Rocket ID:</strong> ${launch.rocket.configuration.id}<br>
+                        <strong>Payload IDs:</strong> ${payloads.join(', ') || 'TBD'}<br>
                         <strong>Status:</strong> <span class="${successClass}">${successText}</span>
-                        ${launch.details ? `<br><strong>Details:</strong> ${launch.details.substring(0, 100)}...` : ''}
+                        ${details ? `<br><strong>Details:</strong> ${details.substring(0, 50)}...` : ''}
                     </div>
                 `;
                 launchGrid.appendChild(launchCard);
@@ -336,29 +341,36 @@
             logDiagnostic('Starting data refresh...');
 
             try {
-                const [upcoming, past] = await Promise.all([
-                    fetchFromAPI('/launches/upcoming').catch(err => { 
-                        showError('upcoming-launches-container', err.message); 
-                        return []; 
-                    }),
-                    fetchFromAPI('/launches/past').catch(err => {
-                         showError('recent-launches-container', err.message);
-                         return [];
-                    })
-                ]);
+                // Fetch upcoming launches (up to 50, but display 10)
+                const upcomingData = await fetchFromAPI(`/launch/upcoming/?limit=50&mode=detailed&launch_service_provider__id=${SPACEX_AGENCY_ID}`).catch(err => { 
+                    showError('upcoming-launches-container', err.message); 
+                    return {count: 0, results: []}; 
+                });
 
-                // Display upcoming launches (first 10)
-                displayLaunches(upcoming.slice(0, 10), 'upcoming-launches-container');
+                // Fetch recent past launches (last 10)
+                const pastData = await fetchFromAPI(`/launch/previous/?limit=10&mode=detailed&launch_service_provider__id=${SPACEX_AGENCY_ID}&ordering=-net`).catch(err => {
+                    showError('recent-launches-container', err.message);
+                    return {count: 0, results: []};
+                });
 
-                // Display recent launches (last 10 from past)
-                const recent = past.sort((a, b) => b.flight_number - a.flight_number).slice(0, 10);
-                displayLaunches(recent, 'recent-launches-container');
+                // Fetch total past count
+                const pastCountData = await fetchFromAPI(`/launch/previous/?limit=1&mode=list&launch_service_provider__id=${SPACEX_AGENCY_ID}`).catch(() => ({count: 0}));
+
+                // Fetch successful past count (status=3 for Success)
+                const successfulData = await fetchFromAPI(`/launch/previous/?limit=1&mode=list&launch_service_provider__id=${SPACEX_AGENCY_ID}&status=3`).catch(() => ({count: 0}));
+
+                const upcoming = upcomingData.results || [];
+                const past = pastData.results || [];
+
+                // Display launches
+                displayLaunches(upcoming.slice(0, 10), 'upcoming-launches-container', true);
+                displayLaunches(past, 'recent-launches-container');
 
                 // Calculate and display stats
                 const stats = {
-                    total: past.length + upcoming.length,
-                    successful: past.filter(l => l.success).length,
-                    upcoming: upcoming.length
+                    total: pastCountData.count + upcomingData.count,
+                    successful: successfulData.count,
+                    upcoming: upcomingData.count
                 };
                 updateStats(stats);
 
