@@ -193,10 +193,6 @@
                 <div class="stat-number" id="upcoming-launches">-</div>
                 <div class="stat-label">Upcoming</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-number" id="excluded-launches">-</div>
-                <div class="stat-label">Excluded</div>
-            </div>
         </div>
 
         <div class="section">
@@ -227,18 +223,8 @@
         let diagnosticsLog = [];
         let isRefreshing = false;
 
-        // API Configuration
-        const API_CONFIG = {
-            v5: {
-                base: 'https://api.spacexdata.com/v5/launches',
-                query: 'https://api.spacexdata.com/v5/launches/query'
-            },
-            v4: {
-                base: 'https://api.spacexdata.com/v4/launches',
-                upcoming: 'https://api.spacexdata.com/v4/launches/upcoming',
-                past: 'https://api.spacexdata.com/v4/launches/past'
-            }
-        };
+        // API Configuration (Using only the working v4 endpoints)
+        const API_BASE = 'https://api.spacexdata.com/v4';
 
         // Utility functions
         function logDiagnostic(message) {
@@ -255,7 +241,9 @@
 
         function updateDiagnosticsDisplay() {
             const diagnosticsOutput = document.getElementById('diagnostics-output');
-            diagnosticsOutput.textContent = diagnosticsLog.join('\n');
+            if(diagnosticsOutput) {
+                diagnosticsOutput.textContent = diagnosticsLog.join('\n');
+            }
         }
 
         function formatDate(dateString) {
@@ -271,142 +259,22 @@
             });
         }
 
-        function isValidDate(dateString) {
-            const date = new Date(dateString);
-            return !isNaN(date.getTime());
-        }
-
-        // API Functions with fixes
-        async function queryLaunchesV5(queryObject) {
+        // API Functions
+        async function fetchFromAPI(endpoint) {
             try {
-                logDiagnostic('Attempting V5 API query...');
-                
-                const response = await fetch(API_CONFIG.v5.query, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(queryObject)
-                });
+                logDiagnostic(`Fetching from ${API_BASE}${endpoint}`);
+                const response = await fetch(`${API_BASE}${endpoint}`);
 
                 if (!response.ok) {
-                    throw new Error(`V5 API request failed: ${response.status} ${response.statusText}`);
+                    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
                 }
 
                 const data = await response.json();
-                logDiagnostic(`V5 API success: ${data.docs ? data.docs.length : 0} launches found`);
-                
-                return data.docs || [];
-            } catch (error) {
-                logDiagnostic(`V5 API error: ${error.message}`);
-                throw error;
-            }
-        }
-
-        async function fetchLaunchesV4(endpoint) {
-            try {
-                logDiagnostic(`Attempting V4 API fallback: ${endpoint}`);
-                
-                const response = await fetch(endpoint);
-
-                if (!response.ok) {
-                    throw new Error(`V4 API request failed: ${response.status} ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                logDiagnostic(`V4 API success: ${data.length} launches found`);
-                
+                logDiagnostic(`Successfully fetched ${data.length} items from ${endpoint}`);
                 return data;
             } catch (error) {
-                logDiagnostic(`V4 API error: ${error.message}`);
+                logDiagnostic(`API error: ${error.message}`);
                 throw error;
-            }
-        }
-
-        async function fetchUpcomingLaunches() {
-            const currentDate = new Date();
-            
-            const upcomingQuery = {
-                "query": { "upcoming": true },
-                "options": {
-                    "sort": { "flight_number": "asc" },
-                    "limit": 10,
-                    "populate": ["rocket", "payloads"]
-                }
-            };
-
-            try {
-                let launches = await queryLaunchesV5(upcomingQuery);
-                launches = launches.filter(launch => isValidDate(launch.date_utc) && new Date(launch.date_utc) >= currentDate);
-                if (launches.length > 0) return launches;
-            } catch (error) {
-                logDiagnostic('V5 upcoming launches failed, trying V4 fallback');
-            }
-
-            try {
-                const launches = await fetchLaunchesV4(API_CONFIG.v4.upcoming);
-                return launches.slice(0, 10);
-            } catch (error) {
-                logDiagnostic('V4 fallback also failed for upcoming launches');
-                throw new Error('Both V5 and V4 APIs failed for upcoming launches');
-            }
-        }
-
-        async function fetchRecentLaunches() {
-            const recentQuery = {
-                "query": { "upcoming": false },
-                "options": {
-                    "sort": { "flight_number": "desc" },
-                    "limit": 10,
-                    "populate": ["rocket", "payloads"]
-                }
-            };
-
-            try {
-                const launches = await queryLaunchesV5(recentQuery);
-                if (launches.length > 0) return launches;
-            } catch (error) {
-                logDiagnostic('V5 recent launches failed, trying V4 fallback');
-            }
-
-            try {
-                const launches = await fetchLaunchesV4(API_CONFIG.v4.past);
-                return launches.sort((a, b) => b.flight_number - a.flight_number).slice(0, 10);
-            } catch (error) {
-                logDiagnostic('V4 fallback also failed for recent launches');
-                throw new Error('Both V5 and V4 APIs failed for recent launches');
-            }
-        }
-
-        async function fetchLaunchStats() {
-            try {
-                const statsQuery = {
-                    "query": {},
-                    "options": { "pagination": false, "select": ["success", "upcoming"] }
-                };
-                const launches = await queryLaunchesV5(statsQuery);
-                return {
-                    total: launches.length,
-                    successful: launches.filter(l => l.success === true).length,
-                    upcoming: launches.filter(l => l.upcoming === true).length,
-                    excluded: launches.filter(l => l.success === null && !l.upcoming).length
-                };
-            } catch (error) {
-                logDiagnostic('V5 stats failed, trying V4 fallback');
-                try {
-                    const [past, upcoming] = await Promise.all([
-                        fetchLaunchesV4(API_CONFIG.v4.past),
-                        fetchLaunchesV4(API_CONFIG.v4.upcoming)
-                    ]);
-                    return {
-                        total: past.length + upcoming.length,
-                        successful: past.filter(l => l.success === true).length,
-                        upcoming: upcoming.length,
-                        excluded: past.filter(l => l.success === null).length
-                    };
-                } catch (fallbackError) {
-                    throw new Error('Both V5 and V4 APIs failed for stats');
-                }
             }
         }
 
@@ -426,21 +294,15 @@
                 const launchCard = document.createElement('div');
                 launchCard.className = 'launch-card';
 
-                const rocketName = launch.rocket?.name || launch.rocket || 'Unknown Rocket';
-                
-                // FIX: Handle both object (V5) and string (V4) payloads
-                const payloads = launch.payloads?.map(p => p.name || p).join(', ') || 'TBD';
-                
-                const launchDate = formatDate(launch.date_utc);
                 const successClass = launch.success === true ? 'success' : (launch.success === false ? 'failure' : '');
                 const successText = launch.upcoming ? 'Upcoming' : (launch.success ? 'Success' : 'Failure');
 
                 launchCard.innerHTML = `
                     <div class="launch-name">${launch.name}</div>
-                    <div class="launch-date">${launchDate}</div>
+                    <div class="launch-date">${formatDate(launch.date_utc)}</div>
                     <div class="launch-details">
-                        <strong>Rocket:</strong> ${rocketName}<br>
-                        <strong>Payload(s):</strong> ${payloads}<br>
+                        <strong>Rocket ID:</strong> ${launch.rocket}<br>
+                        <strong>Payload IDs:</strong> ${launch.payloads.join(', ') || 'TBD'}<br>
                         <strong>Status:</strong> <span class="${successClass}">${successText}</span>
                         ${launch.details ? `<br><strong>Details:</strong> ${launch.details.substring(0, 100)}...` : ''}
                     </div>
@@ -456,7 +318,6 @@
             document.getElementById('total-launches').textContent = stats.total || '-';
             document.getElementById('successful-launches').textContent = stats.successful || '-';
             document.getElementById('upcoming-launches').textContent = stats.upcoming || '-';
-            document.getElementById('excluded-launches').textContent = stats.excluded || '-';
         }
 
         function showError(containerId, message) {
@@ -472,19 +333,34 @@
             const refreshBtn = document.querySelector('.refresh-btn');
             refreshBtn.disabled = true;
             refreshBtn.textContent = 'Refreshing...';
-
             logDiagnostic('Starting data refresh...');
 
             try {
-                const [upcomingLaunches, recentLaunches, stats] = await Promise.all([
-                    fetchUpcomingLaunches().catch(err => { showError('upcoming-launches-container', err.message); return null; }),
-                    fetchRecentLaunches().catch(err => { showError('recent-launches-container', err.message); return null; }),
-                    fetchLaunchStats().catch(err => { logDiagnostic(`Stats error: ${err.message}`); return null; })
+                const [upcoming, past] = await Promise.all([
+                    fetchFromAPI('/launches/upcoming').catch(err => { 
+                        showError('upcoming-launches-container', err.message); 
+                        return []; 
+                    }),
+                    fetchFromAPI('/launches/past').catch(err => {
+                         showError('recent-launches-container', err.message);
+                         return [];
+                    })
                 ]);
 
-                if (upcomingLaunches) displayLaunches(upcomingLaunches, 'upcoming-launches-container');
-                if (recentLaunches) displayLaunches(recentLaunches, 'recent-launches-container');
-                if (stats) updateStats(stats);
+                // Display upcoming launches (first 10)
+                displayLaunches(upcoming.slice(0, 10), 'upcoming-launches-container');
+
+                // Display recent launches (last 10 from past)
+                const recent = past.sort((a, b) => b.flight_number - a.flight_number).slice(0, 10);
+                displayLaunches(recent, 'recent-launches-container');
+
+                // Calculate and display stats
+                const stats = {
+                    total: past.length + upcoming.length,
+                    successful: past.filter(l => l.success).length,
+                    upcoming: upcoming.length
+                };
+                updateStats(stats);
 
                 logDiagnostic('Data refresh completed.');
             } catch (error) {
